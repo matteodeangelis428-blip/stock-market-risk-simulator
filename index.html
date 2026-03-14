@@ -44,9 +44,10 @@ canvas { max-width:90vw; height:50vh; margin:2rem auto; background:rgba(255,255,
 
 <script>
 // ========================================
-// 1. S&P 500 SYMBOLS (sample subset for demo, replace with full 500)
+// 1. S&P 500 SYMBOLS (partial subset for demo, expand as needed)
 // ========================================
 const sp500Symbols = ["AAPL","MSFT","AMZN","GOOGL","TSLA","NVDA","META","BRK-B","JPM","JNJ","V","UNH","HD","PG","MA","BAC","WMT","DIS","ADBE","CMCSA","NFLX","PYPL","PFE","KO","PEP","INTC","CSCO","CRM","XOM","T","CVX","ABBV","ABT","AVGO","NKE","ORCL","MRK","LLY","MCD","ACN","COST","TXN","QCOM","DHR","NEE","LIN","AMD","SCHW","BMY","SPGI"];
+
 // populate dropdown
 const selectEl = document.getElementById("stockSelect");
 sp500Symbols.forEach(sym => {
@@ -59,26 +60,37 @@ window.onload = ()=>{ $(selectEl).select2({placeholder:"Search stocks..."}) };
 // ========================================
 const ctx = document.getElementById("volChart").getContext("2d");
 let volChart;
+
+// fetch stock data
 async function fetchStockData(symbol){
     try{
         const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1mo&interval=1d`);
         const json = await res.json();
         const chartData=json.chart.result[0];
-        const timestamps=chartData.timestamp;
-        const prices=chartData.indicators.quote[0].close;
-        // daily returns
-        let returns=[]; for(let i=1;i<prices.length;i++){returns.push((prices[i]-prices[i-1])/prices[i-1]);}
+        let timestamps = chartData.timestamp;
+        let prices = chartData.indicators.quote[0].close;
+
+        // filter out null prices and align timestamps
+        let filtered = timestamps.map((t,i)=>({t: t, p: prices[i]})).filter(dp=>dp.p !== null);
+        if(filtered.length===0) return null;
+        const dates = filtered.map(dp=>new Date(dp.t*1000).toLocaleDateString());
+        prices = filtered.map(dp=>dp.p);
+
+        // daily returns for volatility
+        let returns=[];
+        for(let i=1;i<prices.length;i++){returns.push((prices[i]-prices[i-1])/prices[i-1]);}
         const mean = returns.reduce((a,b)=>a+b,0)/returns.length;
-        const variance=returns.map(r=>Math.pow(r-mean,2)).reduce((a,b)=>a+b,0)/(returns.length-1);
-        const vol=Math.sqrt(variance);
+        const variance = returns.map(r=>Math.pow(r-mean,2)).reduce((a,b)=>a+b,0)/(returns.length-1);
+        const vol = Math.sqrt(variance);
 
         // rolling volatility 7-day & 30-day
-        const rolling7=prices.slice(-7).length>1?Math.sqrt(prices.slice(-7).map((p,i,a)=>i>0?(p-a[i-1])/a[i-1]:0).slice(1).reduce((sum,r)=>sum+Math.pow(r-(returns.reduce((a,b)=>a+b,0)/returns.length),2),0)/(6)):0;
-        const rolling30=prices.slice(-30).length>1?Math.sqrt(prices.slice(-30).map((p,i,a)=>i>0?(p-a[i-1])/a[i-1]:0).slice(1).reduce((sum,r)=>sum+Math.pow(r-(returns.reduce((a,b)=>a+b,0)/returns.length),2),0)/(29)):0;
+        const rolling7 = prices.slice(-7).length>1?Math.sqrt(prices.slice(-7).map((p,i,a)=>i>0?(p-a[i-1])/a[i-1]:0).slice(1).reduce((sum,r)=>sum+Math.pow(r-(returns.reduce((a,b)=>a+b,0)/returns.length),2),0)/(6)):0;
+        const rolling30 = prices.slice(-30).length>1?Math.sqrt(prices.slice(-30).map((p,i,a)=>i>0?(p-a[i-1])/a[i-1]:0).slice(1).reduce((sum,r)=>sum+Math.pow(r-(returns.reduce((a,b)=>a+b,0)/returns.length),2),0)/(29)):0;
 
         // color by volatility
-        let color=vol<0.015?"#4AFE82":vol<0.03?"#F2E94E":"#FF4E4E";
-        return {dates:timestamps.map(t=>new Date(t*1000).toLocaleDateString()), prices, vol, color, rolling7, rolling30};
+        const color = vol<0.015?"#4AFE82":vol<0.03?"#F2E94E":"#FF4E4E";
+
+        return {dates, prices, vol, color, rolling7, rolling30};
     }catch(err){console.error(err); return null;}
 }
 
@@ -95,13 +107,23 @@ async function updateDashboard(){
     // destroy old chart
     if(volChart) volChart.destroy();
 
-    // prepare datasets for Chart.js
-    const datasets=stockDataArray.map(sd=>{
-        return {label:`${sd ? sd.prices.length && sd.dates[sd.dates.length-1] ? sd.prices[sd.prices.length-1]:'' : ''}`, data: sd ? sd.prices : [], borderColor: sd.color, backgroundColor: sd.color+"55", tension:0.25, fill:true};
-    });
+    // prepare datasets
+    const datasets = stockDataArray.map(sd=>{
+        if(!sd) return null;
+        return {label:`${sd.prices.length && sd.dates[sd.dates.length-1]?sd.prices[sd.prices.length-1]:''}`, data: sd.prices, borderColor: sd.color, backgroundColor: sd.color+"55", tension:0.25, fill:true};
+    }).filter(d=>d!==null);
+
+    if(datasets.length===0) return; // no valid data
 
     // create chart
-    volChart=new Chart(ctx,{type:"line",data:{labels:stockDataArray[0].dates,datasets},options:{responsive:true,scales:{x:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}},y:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}}},plugins:{tooltip:{mode:"index",intersect:false}}}});
+    volChart=new Chart(ctx,{
+        type:"line",
+        data:{labels:stockDataArray[0].dates,datasets},
+        options:{responsive:true,
+            scales:{x:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}},y:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}}},
+            plugins:{tooltip:{mode:"index",intersect:false}}
+        }
+    });
 
     // update info panel
     let infoHTML="";
@@ -118,7 +140,7 @@ async function updateDashboard(){
     sp500Symbols.forEach(sym=>{
         fetchStockData(sym).then(sd=>{
             if(sd){
-                let color=sd.vol<0.015?"#4AFE82":sd.vol<0.03?"#F2E94E":"#FF4E4E";
+                const color=sd.vol<0.015?"#4AFE82":sd.vol<0.03?"#F2E94E":"#FF4E4E";
                 const cell=document.createElement("div");
                 cell.className="heatCell"; cell.style.background=color; cell.textContent=sym;
                 heatEl.appendChild(cell);
@@ -131,7 +153,7 @@ async function updateDashboard(){
 setInterval(updateDashboard,30000);
 selectEl.addEventListener("change",updateDashboard);
 updateDashboard();
-</script>
 
+</script>
 </body>
 </html>
