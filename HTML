@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+<title>Stock Market Risk Simulator</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+<h1>Stock Market Risk Simulator</h1>
+
+<p>This interactive tool simulates possible future market outcomes using Monte Carlo simulation based on historical behavior of the S&P 500.</p>
+
+<label>Years to simulate:</label>
+<input type="range" id="years" min="1" max="40" value="10">
+<span id="yearsValue">10</span> years
+
+<br><br>
+
+<label>Number of simulations:</label>
+<input type="range" id="sims" min="10" max="200" value="50">
+<span id="simsValue">50</span>
+
+<br><br>
+
+<button onclick="runSimulation()">Run Simulation</button>
+
+<p id="probability"></p>
+
+<canvas id="chart" width="800" height="400"></canvas>
+
+<script>
+
+let chart
+
+document.getElementById("years").oninput=function(){
+document.getElementById("yearsValue").innerHTML=this.value
+}
+
+document.getElementById("sims").oninput=function(){
+document.getElementById("simsValue").innerHTML=this.value
+}
+
+function runSimulation(){
+
+let years=document.getElementById("years").value
+let simulations=document.getElementById("sims").value
+
+let days=years*252
+let start=100
+
+let datasets=[]
+let losses=0
+
+for(let s=0;s<simulations;s++){
+
+let price=start
+let data=[]
+
+for(let d=0;d<days;d++){
+
+let shock=(Math.random()-0.5)*0.02
+price=price*(1+shock)
+
+data.push(price)
+
+}
+
+if(price<start){
+losses++
+}
+
+datasets.push({
+data:data,
+borderColor:"rgba(0,0,255,0.2)",
+pointRadius:0,
+fill:false
+})
+
+}
+
+let prob=(losses/simulations*100).toFixed(2)
+
+document.getElementById("probability").innerHTML=
+"Probability of losing money: "+prob+"%"
+
+const ctx=document.getElementById("chart")
+
+if(chart){
+chart.destroy()
+}
+
+chart=new Chart(ctx,{
+type:'line',
+data:{
+labels:Array(days).fill(""),
+datasets:datasets
+},
+options:{
+responsive:false,
+plugins:{
+legend:{display:false}
+}
+}
+})
+
+}
+
+</script>
+
+</body>
+
+</html>
