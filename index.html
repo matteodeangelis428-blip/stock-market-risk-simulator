@@ -3,12 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <title>Interactive Stock Volatility Lab</title>
-
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
 <style>
 body { font-family:"Segoe UI",sans-serif; margin:0; padding:0; background:linear-gradient(to bottom right,#0f2027,#203a43,#2c5364); color:#fff; text-align:center;}
-header { padding:2rem;}
+header { padding:2rem; }
 input, select, button { padding:0.5rem; margin:0.3rem; border-radius:6px; border:none; font-size:1rem;}
 canvas { max-width:90vw; height:50vh; margin:2rem auto; background:rgba(255,255,255,0.05); border-radius:14px; box-shadow:0px 4px 20px rgba(255,255,255,0.15);}
 #info { margin-top:1rem; font-size:1.1rem;}
@@ -18,10 +16,27 @@ canvas { max-width:90vw; height:50vh; margin:2rem auto; background:rgba(255,255,
 
 <header>
 <h1>Interactive Stock Volatility Lab</h1>
-<p>Type any stock symbol, adjust parameters, and simulate future price paths</p>
+<p>Type any stock symbol or select from dropdown, adjust parameters, and simulate future price paths</p>
 
 <div>
-<input type="text" id="symbol" placeholder="Stock symbol e.g. AAPL">
+<input type="text" id="symbolInput" placeholder="Enter stock symbol e.g. AAPL">
+<select id="symbolSelect">
+<option value="">--Or choose a stock--</option>
+<option value="AAPL">AAPL</option>
+<option value="MSFT">MSFT</option>
+<option value="AMZN">AMZN</option>
+<option value="GOOGL">GOOGL</option>
+<option value="TSLA">TSLA</option>
+<option value="NVDA">NVDA</option>
+<option value="META">META</option>
+<option value="BRK-B">BRK-B</option>
+<option value="JPM">JPM</option>
+<option value="JNJ">JNJ</option>
+</select>
+</div>
+
+<div>
+<label>Simulation Horizon (Years): </label>
 <select id="years">
 <option value="1">1 Year</option>
 <option value="2">2 Years</option>
@@ -31,7 +46,7 @@ canvas { max-width:90vw; height:50vh; margin:2rem auto; background:rgba(255,255,
 </div>
 
 <div>
-<label>Drift (Expected Daily Return %): <span id="driftVal">0</span></label><br>
+<label>Drift (Daily %): <span id="driftVal">0</span></label><br>
 <input type="range" id="drift" min="-0.05" max="0.05" step="0.001" value="0">
 </div>
 
@@ -41,7 +56,7 @@ canvas { max-width:90vw; height:50vh; margin:2rem auto; background:rgba(255,255,
 </div>
 
 <div>
-<label>Number of simulations: <span id="numSimVal">5</span></label><br>
+<label>Number of Simulations: <span id="numSimVal">5</span></label><br>
 <input type="range" id="numSim" min="1" max="20" step="1" value="5">
 </div>
 
@@ -55,8 +70,15 @@ canvas { max-width:90vw; height:50vh; margin:2rem auto; background:rgba(255,255,
 let chartInstance;
 let lastSimulationData = [];
 
-function randomNormal(){ let u=0,v=0; while(u===0) u=Math.random(); while(v===0) v=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+// Random normal number generator
+function randomNormal(){ 
+    let u=0,v=0; 
+    while(u===0) u=Math.random(); 
+    while(v===0) v=Math.random();
+    return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); 
+}
 
+// Fetch historical stock data
 async function fetchStockData(symbol, years){
     try{
         const end = Math.floor(Date.now()/1000);
@@ -64,26 +86,29 @@ async function fetchStockData(symbol, years){
         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${start}&period2=${end}&interval=1d`;
         const res = await fetch(url);
         const json = await res.json();
+        if(!json.chart.result){ alert("Invalid symbol or no data available."); return null;}
         const chart = json.chart.result[0];
         let timestamps = chart.timestamp;
         let prices = chart.indicators.quote[0].close;
-        let filtered = timestamps.map((t,i)=>({t: t, p: prices[i]})).filter(dp=>dp.p!==null);
+        let filtered = timestamps.map((t,i)=>({t:t,p:prices[i]})).filter(dp=>dp.p!==null);
         if(filtered.length===0) return null;
         const dates = filtered.map(dp=>new Date(dp.t*1000).toLocaleDateString());
         prices = filtered.map(dp=>dp.p);
         return {dates, prices};
-    }catch(e){alert("Error fetching data. Make sure symbol is valid."); return null;}
+    } catch(e){ alert("Error fetching data. Check symbol."); return null;}
 }
 
+// Calculate historical daily volatility
 function calculateVolatility(prices){
     let returns=[];
-    for(let i=1;i<prices.length;i++){returns.push((prices[i]-prices[i-1])/prices[i-1]);}
+    for(let i=1;i<prices.length;i++){ returns.push((prices[i]-prices[i-1])/prices[i-1]); }
     const mean = returns.reduce((a,b)=>a+b,0)/returns.length;
     const variance = returns.map(r=>Math.pow(r-mean,2)).reduce((a,b)=>a+b,0)/(returns.length-1);
     const vol = Math.sqrt(variance);
     return {returns, vol};
 }
 
+// Simulate future prices using GBM
 function simulateFuturePrices(lastPrice, vol, drift, years, steps=252, numSim=5){
     const dt = 1/252;
     let paths = [];
@@ -99,20 +124,23 @@ function simulateFuturePrices(lastPrice, vol, drift, years, steps=252, numSim=5)
     return paths;
 }
 
+// Run simulation
 async function runSimulation(){
-    const symbol = document.getElementById("symbol").value.toUpperCase();
+    let symbol = document.getElementById("symbolInput").value.toUpperCase().trim();
+    const selectSymbol = document.getElementById("symbolSelect").value;
+    if(selectSymbol) symbol = selectSymbol; // dropdown overrides text input if selected
     const years = parseInt(document.getElementById("years").value);
     const driftInput = parseFloat(document.getElementById("drift").value);
     let volInput = parseFloat(document.getElementById("vol").value);
     const numSim = parseInt(document.getElementById("numSim").value);
 
-    if(!symbol){alert("Enter a stock symbol"); return;}
+    if(!symbol){ alert("Enter a stock symbol"); return;}
     const data = await fetchStockData(symbol, years);
     if(!data) return;
 
     const lastPrice = data.prices[data.prices.length-1];
     const {vol} = calculateVolatility(data.prices);
-    if(isNaN(volInput) || volInput===0){volInput = vol;} // use actual volatility if slider at 0
+    if(isNaN(volInput) || volInput===0){volInput = vol;}
 
     const futurePaths = simulateFuturePrices(lastPrice, volInput, driftInput, years, 252, numSim);
     lastSimulationData = futurePaths;
@@ -130,14 +158,14 @@ async function runSimulation(){
     const labels = [...data.dates, ...futureDates];
 
     if(chartInstance) chartInstance.destroy();
-    chartInstance = new Chart(document.getElementById("chart"), {type:"line", data:{labels, datasets}, options:{responsive:true, scales:{x:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}}, y:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}}, plugins:{tooltip:{mode:"index",intersect:false}}}}});
+    chartInstance = new Chart(document.getElementById("chart"), {type:"line", data:{labels, datasets}, options:{responsive:true, scales:{x:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}},y:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}}, plugins:{tooltip:{mode:"index",intersect:false}}}}});
 
     document.getElementById("info").innerHTML = `Latest price: $${lastPrice.toFixed(2)} | Daily vol: ${(volInput*100).toFixed(2)}% | Drift: ${(driftInput*100).toFixed(2)}% | ${numSim} simulations for ${years} year(s)`;
 }
 
-// Export simulated paths to CSV
+// Export CSV
 function exportCSV(){
-    if(!lastSimulationData.length){alert("Run simulation first"); return;}
+    if(!lastSimulationData.length){ alert("Run simulation first"); return; }
     let csv="Simulation,Day,Price\n";
     lastSimulationData.forEach((sim,i)=>{
         sim.forEach((price,j)=>{
@@ -146,11 +174,10 @@ function exportCSV(){
     });
     const blob = new Blob([csv], {type:"text/csv"});
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href=url; a.download="simulations.csv"; a.click(); URL.revokeObjectURL(url);
+    const a = document.createElement("a"); a.href=url; a.download="simulations.csv"; a.click(); URL.revokeObjectURL(url);
 }
 
-// Update slider labels
+// Slider labels
 document.getElementById("drift").addEventListener("input",()=>{document.getElementById("driftVal").textContent=document.getElementById("drift").value;});
 document.getElementById("vol").addEventListener("input",()=>{document.getElementById("volVal").textContent=document.getElementById("vol").value==="0"?"auto":document.getElementById("vol").value;});
 document.getElementById("numSim").addEventListener("input",()=>{document.getElementById("numSimVal").textContent=document.getElementById("numSim").value;});
