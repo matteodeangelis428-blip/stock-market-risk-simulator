@@ -2,158 +2,159 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>S&P 500 Volatility Dashboard</title>
+<title>Interactive Stock Volatility Lab</title>
 
-<!-- Chart.js -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-<!-- Select2 for searchable dropdown -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
-<link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet" />
-
 <style>
-body {
-    font-family: "Segoe UI", sans-serif;
-    margin:0; padding:0;
-    background: linear-gradient(to bottom right, #0f2027, #203a43, #2c5364);
-    color:#fff;
-    text-align:center;
-}
-header { padding: 2rem; }
-#controls { margin-bottom:1rem; }
-select { width:300px; margin-right:1rem; }
+body { font-family:"Segoe UI",sans-serif; margin:0; padding:0; background:linear-gradient(to bottom right,#0f2027,#203a43,#2c5364); color:#fff; text-align:center;}
+header { padding:2rem;}
+input, select, button { padding:0.5rem; margin:0.3rem; border-radius:6px; border:none; font-size:1rem;}
 canvas { max-width:90vw; height:50vh; margin:2rem auto; background:rgba(255,255,255,0.05); border-radius:14px; box-shadow:0px 4px 20px rgba(255,255,255,0.15);}
-#stockInfo { margin-top:1rem; font-size:1.1rem;}
-#heatmap { display:grid; grid-template-columns: repeat(auto-fill, minmax(60px,1fr)); grid-gap:2px; max-width:90vw; margin:2rem auto;}
-.heatCell { width:100%; padding:6px; font-size:0.7rem; color:#fff; border-radius:2px; text-align:center;}
-@media(max-width:600px){select{width:90%; margin-bottom:0.5rem;}}
+#info { margin-top:1rem; font-size:1.1rem;}
 </style>
 </head>
 <body>
 
 <header>
-<h1>S&P 500 Volatility Dashboard</h1>
-<p>Select stocks, see live prices, volatility, heatmap & rolling forecasts</p>
-<div id="controls">
-<select id="stockSelect" multiple></select>
+<h1>Interactive Stock Volatility Lab</h1>
+<p>Type any stock symbol, adjust parameters, and simulate future price paths</p>
+
+<div>
+<input type="text" id="symbol" placeholder="Stock symbol e.g. AAPL">
+<select id="years">
+<option value="1">1 Year</option>
+<option value="2">2 Years</option>
+<option value="3">3 Years</option>
+<option value="5">5 Years</option>
+</select>
 </div>
-<div id="stockInfo"></div>
-<canvas id="volChart"></canvas>
-<div id="heatmap"></div>
-</header>
+
+<div>
+<label>Drift (Expected Daily Return %): <span id="driftVal">0</span></label><br>
+<input type="range" id="drift" min="-0.05" max="0.05" step="0.001" value="0">
+</div>
+
+<div>
+<label>Volatility Override (Daily %): <span id="volVal">auto</span></label><br>
+<input type="range" id="vol" min="0.005" max="0.1" step="0.001" value="0">
+</div>
+
+<div>
+<label>Number of simulations: <span id="numSimVal">5</span></label><br>
+<input type="range" id="numSim" min="1" max="20" step="1" value="5">
+</div>
+
+<button onclick="runSimulation()">Run Simulation</button>
+<button onclick="exportCSV()">Export CSV</button>
+
+<div id="info"></div>
+<canvas id="chart"></canvas>
 
 <script>
-// ========================================
-// 1. S&P 500 SYMBOLS (partial subset for demo, expand as needed)
-// ========================================
-const sp500Symbols = ["AAPL","MSFT","AMZN","GOOGL","TSLA","NVDA","META","BRK-B","JPM","JNJ","V","UNH","HD","PG","MA","BAC","WMT","DIS","ADBE","CMCSA","NFLX","PYPL","PFE","KO","PEP","INTC","CSCO","CRM","XOM","T","CVX","ABBV","ABT","AVGO","NKE","ORCL","MRK","LLY","MCD","ACN","COST","TXN","QCOM","DHR","NEE","LIN","AMD","SCHW","BMY","SPGI"];
+let chartInstance;
+let lastSimulationData = [];
 
-// populate dropdown
-const selectEl = document.getElementById("stockSelect");
-sp500Symbols.forEach(sym => {
-    let opt=document.createElement("option"); opt.value=sym; opt.text=sym; selectEl.add(opt);
-});
-window.onload = ()=>{ $(selectEl).select2({placeholder:"Search stocks..."}) };
+function randomNormal(){ let u=0,v=0; while(u===0) u=Math.random(); while(v===0) v=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
 
-// ========================================
-// 2. Chart.js setup
-// ========================================
-const ctx = document.getElementById("volChart").getContext("2d");
-let volChart;
-
-// fetch stock data
-async function fetchStockData(symbol){
+async function fetchStockData(symbol, years){
     try{
-        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1mo&interval=1d`);
+        const end = Math.floor(Date.now()/1000);
+        const start = end - years*365*24*60*60;
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${start}&period2=${end}&interval=1d`;
+        const res = await fetch(url);
         const json = await res.json();
-        const chartData=json.chart.result[0];
-        let timestamps = chartData.timestamp;
-        let prices = chartData.indicators.quote[0].close;
-
-        // filter out null prices and align timestamps
-        let filtered = timestamps.map((t,i)=>({t: t, p: prices[i]})).filter(dp=>dp.p !== null);
+        const chart = json.chart.result[0];
+        let timestamps = chart.timestamp;
+        let prices = chart.indicators.quote[0].close;
+        let filtered = timestamps.map((t,i)=>({t: t, p: prices[i]})).filter(dp=>dp.p!==null);
         if(filtered.length===0) return null;
         const dates = filtered.map(dp=>new Date(dp.t*1000).toLocaleDateString());
         prices = filtered.map(dp=>dp.p);
-
-        // daily returns for volatility
-        let returns=[];
-        for(let i=1;i<prices.length;i++){returns.push((prices[i]-prices[i-1])/prices[i-1]);}
-        const mean = returns.reduce((a,b)=>a+b,0)/returns.length;
-        const variance = returns.map(r=>Math.pow(r-mean,2)).reduce((a,b)=>a+b,0)/(returns.length-1);
-        const vol = Math.sqrt(variance);
-
-        // rolling volatility 7-day & 30-day
-        const rolling7 = prices.slice(-7).length>1?Math.sqrt(prices.slice(-7).map((p,i,a)=>i>0?(p-a[i-1])/a[i-1]:0).slice(1).reduce((sum,r)=>sum+Math.pow(r-(returns.reduce((a,b)=>a+b,0)/returns.length),2),0)/(6)):0;
-        const rolling30 = prices.slice(-30).length>1?Math.sqrt(prices.slice(-30).map((p,i,a)=>i>0?(p-a[i-1])/a[i-1]:0).slice(1).reduce((sum,r)=>sum+Math.pow(r-(returns.reduce((a,b)=>a+b,0)/returns.length),2),0)/(29)):0;
-
-        // color by volatility
-        const color = vol<0.015?"#4AFE82":vol<0.03?"#F2E94E":"#FF4E4E";
-
-        return {dates, prices, vol, color, rolling7, rolling30};
-    }catch(err){console.error(err); return null;}
+        return {dates, prices};
+    }catch(e){alert("Error fetching data. Make sure symbol is valid."); return null;}
 }
 
-// ========================================
-// 3. Update dashboard
-// ========================================
-async function updateDashboard(){
-    const selected = Array.from(selectEl.selectedOptions).map(o=>o.value);
-    if(selected.length===0) return;
+function calculateVolatility(prices){
+    let returns=[];
+    for(let i=1;i<prices.length;i++){returns.push((prices[i]-prices[i-1])/prices[i-1]);}
+    const mean = returns.reduce((a,b)=>a+b,0)/returns.length;
+    const variance = returns.map(r=>Math.pow(r-mean,2)).reduce((a,b)=>a+b,0)/(returns.length-1);
+    const vol = Math.sqrt(variance);
+    return {returns, vol};
+}
 
-    // fetch all selected stocks
-    const stockDataArray = await Promise.all(selected.map(fetchStockData));
-
-    // destroy old chart
-    if(volChart) volChart.destroy();
-
-    // prepare datasets
-    const datasets = stockDataArray.map(sd=>{
-        if(!sd) return null;
-        return {label:`${sd.prices.length && sd.dates[sd.dates.length-1]?sd.prices[sd.prices.length-1]:''}`, data: sd.prices, borderColor: sd.color, backgroundColor: sd.color+"55", tension:0.25, fill:true};
-    }).filter(d=>d!==null);
-
-    if(datasets.length===0) return; // no valid data
-
-    // create chart
-    volChart=new Chart(ctx,{
-        type:"line",
-        data:{labels:stockDataArray[0].dates,datasets},
-        options:{responsive:true,
-            scales:{x:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}},y:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}}},
-            plugins:{tooltip:{mode:"index",intersect:false}}
+function simulateFuturePrices(lastPrice, vol, drift, years, steps=252, numSim=5){
+    const dt = 1/252;
+    let paths = [];
+    for(let i=0;i<numSim;i++){
+        let path=[lastPrice];
+        for(let j=0;j<steps*years;j++){
+            const shock = vol*Math.sqrt(dt)*randomNormal();
+            const nextPrice = path[path.length-1]*Math.exp(drift*dt + shock);
+            path.push(nextPrice);
         }
+        paths.push(path);
+    }
+    return paths;
+}
+
+async function runSimulation(){
+    const symbol = document.getElementById("symbol").value.toUpperCase();
+    const years = parseInt(document.getElementById("years").value);
+    const driftInput = parseFloat(document.getElementById("drift").value);
+    let volInput = parseFloat(document.getElementById("vol").value);
+    const numSim = parseInt(document.getElementById("numSim").value);
+
+    if(!symbol){alert("Enter a stock symbol"); return;}
+    const data = await fetchStockData(symbol, years);
+    if(!data) return;
+
+    const lastPrice = data.prices[data.prices.length-1];
+    const {vol} = calculateVolatility(data.prices);
+    if(isNaN(volInput) || volInput===0){volInput = vol;} // use actual volatility if slider at 0
+
+    const futurePaths = simulateFuturePrices(lastPrice, volInput, driftInput, years, 252, numSim);
+    lastSimulationData = futurePaths;
+
+    const datasets = [{label:"Historical", data:data.prices, borderColor:"#4AFE82", backgroundColor:"#4AFE8255", fill:true, tension:0.25}];
+    futurePaths.forEach((path,i)=>{
+        datasets.push({label:`Simulation ${i+1}`, data:[...Array(data.prices.length-1).fill(null), lastPrice, ...path], borderColor:"#FF4E4E", borderDash:[5,5], fill:false, tension:0.25});
     });
 
-    // update info panel
-    let infoHTML="";
-    stockDataArray.forEach((sd,i)=>{
-        if(sd){
-            infoHTML+=`<strong>${selected[i]}</strong> Latest: $${sd.prices[sd.prices.length-1].toFixed(2)} | Vol: ${(sd.vol*100).toFixed(2)}% | 7-day: ${(sd.rolling7*100).toFixed(2)}% | 30-day: ${(sd.rolling30*100).toFixed(2)}%<br>`;
-            if(sd.vol>0.04){alert(`⚠️ ${selected[i]} volatility exceeded 4%!`);}
-        }
-    });
-    document.getElementById("stockInfo").innerHTML=infoHTML;
+    const futureDates = [];
+    const lastDate = new Date(data.dates[data.dates.length-1]);
+    for(let i=1;i<=futurePaths[0].length;i++){
+        let d = new Date(lastDate); d.setDate(d.getDate()+i); futureDates.push(d.toLocaleDateString());
+    }
+    const labels = [...data.dates, ...futureDates];
 
-    // update heatmap
-    const heatEl=document.getElementById("heatmap"); heatEl.innerHTML="";
-    sp500Symbols.forEach(sym=>{
-        fetchStockData(sym).then(sd=>{
-            if(sd){
-                const color=sd.vol<0.015?"#4AFE82":sd.vol<0.03?"#F2E94E":"#FF4E4E";
-                const cell=document.createElement("div");
-                cell.className="heatCell"; cell.style.background=color; cell.textContent=sym;
-                heatEl.appendChild(cell);
-            }
+    if(chartInstance) chartInstance.destroy();
+    chartInstance = new Chart(document.getElementById("chart"), {type:"line", data:{labels, datasets}, options:{responsive:true, scales:{x:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}}, y:{ticks:{color:"#FFF"},grid:{color:"rgba(255,255,255,0.1)"}}, plugins:{tooltip:{mode:"index",intersect:false}}}}});
+
+    document.getElementById("info").innerHTML = `Latest price: $${lastPrice.toFixed(2)} | Daily vol: ${(volInput*100).toFixed(2)}% | Drift: ${(driftInput*100).toFixed(2)}% | ${numSim} simulations for ${years} year(s)`;
+}
+
+// Export simulated paths to CSV
+function exportCSV(){
+    if(!lastSimulationData.length){alert("Run simulation first"); return;}
+    let csv="Simulation,Day,Price\n";
+    lastSimulationData.forEach((sim,i)=>{
+        sim.forEach((price,j)=>{
+            csv+=`${i+1},${j+1},${price}\n`;
         });
     });
+    const blob = new Blob([csv], {type:"text/csv"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href=url; a.download="simulations.csv"; a.click(); URL.revokeObjectURL(url);
 }
 
-// auto-update every 30s
-setInterval(updateDashboard,30000);
-selectEl.addEventListener("change",updateDashboard);
-updateDashboard();
-
+// Update slider labels
+document.getElementById("drift").addEventListener("input",()=>{document.getElementById("driftVal").textContent=document.getElementById("drift").value;});
+document.getElementById("vol").addEventListener("input",()=>{document.getElementById("volVal").textContent=document.getElementById("vol").value==="0"?"auto":document.getElementById("vol").value;});
+document.getElementById("numSim").addEventListener("input",()=>{document.getElementById("numSimVal").textContent=document.getElementById("numSim").value;});
 </script>
+
 </body>
 </html>
